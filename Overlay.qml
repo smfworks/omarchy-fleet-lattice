@@ -22,6 +22,7 @@ Item {
   property string loadavgText: ""
   property string configText: ""
   property string configError: ""
+  property bool configMissing: true
   property string envFleetText: ""
   property string selectedId: "local"
   property var probeMap: ({})
@@ -82,7 +83,7 @@ Item {
 
   function rebuildFleet() {
     var cfg = root.configText ? Lattice.parseConfig(root.configText, "config") : Lattice.emptyConfig()
-    if (root.configError && !root.configText) {
+    if (root.configError && !root.configText && !root.configMissing) {
       cfg = Lattice.emptyConfig()
       cfg.ok = false
       cfg.error = root.configError
@@ -117,6 +118,7 @@ Item {
     if (!hostnameProc.running) hostnameProc.running = true
     if (!unameProc.running) unameProc.running = true
     if (!loadProc.running) loadProc.running = true
+    if (!configStatProc.running) configStatProc.running = true
     try { configView.reload() } catch (e) {}
   }
 
@@ -141,26 +143,78 @@ Item {
   function maybeStartProbes() {
     if (!root.opened || !root.fleet.probesEnabled) return
     if (probeProc.running) return
-    var queue = Lattice.probeQueue(root.fleet.nodes, true, root.fleet.probeMethod)
+    var queue = Lattice.probeQueue(root.fleet.nodes, root.fleet.probesEnabled, root.fleet.probeMethod)
     if (!queue.length) return
+    var now = Date.now()
     var next = null
     var i
     for (i = 0; i < queue.length; i++) {
-      if (!root.probeMap[queue[i].id]) { next = queue[i]; break }
+      var item = queue[i]
+      var node = Lattice.findNode(root.fleet.nodes, item.id)
+      var hit = Lattice.lookupProbe(root.probeMap, node || item)
+      if (Lattice.probeDue(node || item, hit, now, root.fleet.staleAfterMs)) {
+        next = item
+        break
+      }
     }
     if (!next) return
     probeProc.command = next.argv
     probeProc.nodeId = next.id
+    probeProc.host = next.host || ""
     probeProc.method = next.method
     probeProc.running = true
+    root.ingestProbe(next.id, next.method, null, "", true, next.host)
   }
 
-  function ingestProbe(id, method, ok, errorText) {
+  function expireHungProbes() {
+    if (!root.fleet.probesEnabled) return
+    var now = Date.now()
+    var changed = false
+    var next = {}
+    var key
+    for (key in root.probeMap) next[key] = root.probeMap[key]
+    for (key in next) {
+      var hit = next[key]
+      if (!hit || hit.pending !== true || hit.ok === true || hit.ok === false) continue
+      if (now - Number(hit.at || 0) <= Lattice.PROBE_TIMEOUT_MS) continue
+      next[key] = {
+        ok: false,
+        pending: false,
+        method: hit.method || "ping",
+        at: now,
+        host: hit.host || "",
+        error: "probe timed out · no result"
+      }
+      changed = true
+    }
+    if (changed) {
+      root.probeMap = next
+      if (probeProc.running && next[probeProc.nodeId] && next[probeProc.nodeId].ok === false)
+        probeProc.running = false
+      root.rebuildFleet()
+    }
+  }
+
+  function ingestProbe(id, method, ok, errorText, pending, host) {
     if (!id) return
     var next = {}
     var key
     for (key in root.probeMap) next[key] = root.probeMap[key]
-    next[id] = { ok: ok === true, method: method || "ping", at: Date.now(), error: errorText || "" }
+    var row = {
+      method: method || "ping",
+      at: Date.now(),
+      error: errorText || "",
+      host: host || ""
+    }
+    if (pending === true) {
+      row.pending = true
+    } else {
+      row.ok = ok === true
+      row.pending = false
+      if (ok !== true) row.error = Lattice.classifyProbeFailure(errorText)
+    }
+    next[Lattice.probeKey(id, row.host)] = row
+    next[id] = row
     root.probeMap = next
     root.rebuildFleet()
   }
@@ -226,12 +280,12 @@ Item {
       var from = root.nodeById(edge.from)
       var to = root.nodeById(edge.to)
       if (!from || !to) continue
-      var tone = Lattice.chipColor(edge.chip)
-      var alpha = edge.kind === "live" ? 0.72 : (edge.kind === "demo" ? 0.28 : 0.2)
+      var tone = edge.kind === "live" ? Lattice.chipColor("LIVE") : Lattice.chipColor(edge.chip)
+      var stroke = Lattice.edgeStroke(edge.kind)
       ctx.beginPath()
-      ctx.lineWidth = edge.kind === "live" ? 2.4 : 1.3
-      ctx.strokeStyle = cssColor(tone, alpha)
-      if (edge.kind === "configured" || edge.kind === "unknown" || edge.kind === "demo")
+      ctx.lineWidth = stroke.width
+      ctx.strokeStyle = cssColor(tone, stroke.alpha)
+      if (stroke.dash)
         ctx.setLineDash([7, 9])
       else
         ctx.setLineDash([])
@@ -239,6 +293,29 @@ Item {
       ctx.lineTo(to.px, to.py)
       ctx.stroke()
       ctx.setLineDash([])
+    }
+  }
+
+  Process {
+    id: configStatProc
+    running: false
+    command: ["bash", "-c", "p=\"$1\"; if [ ! -e \"$p\" ]; then echo MISSING; elif [ ! -r \"$p\" ]; then echo UNREADABLE; else echo OK; fi", "stat", Lattice.configPath(root.homeDir)]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var flag = String(text || "").replace(/^\s+|\s+$/g, "")
+        if (flag === "MISSING") {
+          root.configText = ""
+          root.configError = ""
+          root.configMissing = true
+        } else if (flag === "UNREADABLE") {
+          root.configText = ""
+          root.configError = "fleet.json exists but is unreadable"
+          root.configMissing = false
+        }
+        if (root.opened || flag === "UNREADABLE" || flag === "MISSING")
+          root.rebuildFleet()
+      }
     }
   }
 
@@ -250,11 +327,21 @@ Item {
     onLoaded: {
       root.configText = configView.text()
       root.configError = ""
+      root.configMissing = false
       if (root.opened) root.rebuildFleet()
     }
-    onLoadFailed: {
+    onLoadFailed: function(error) {
+      var classified = Lattice.classifyConfigLoadError(error)
+      if (root.configError && !classified.missing) {
+        classified = { missing: false, ok: false, error: root.configError }
+      }
       root.configText = ""
-      root.configError = ""
+      if (!root.configError)
+        root.configError = classified.error
+      if (classified.missing && !root.configError)
+        root.configMissing = true
+      else if (!classified.missing)
+        root.configMissing = false
       if (root.opened) root.rebuildFleet()
     }
   }
@@ -324,11 +411,20 @@ Item {
     id: probeProc
     running: false
     property string nodeId: ""
+    property string host: ""
     property string method: "ping"
     onExited: {
       var ok = probeProc.exitCode === 0
-      root.ingestProbe(probeProc.nodeId, probeProc.method, ok, ok ? "" : "probe exit " + probeProc.exitCode)
+      root.ingestProbe(
+        probeProc.nodeId,
+        probeProc.method,
+        ok,
+        ok ? "" : "probe exit " + probeProc.exitCode,
+        false,
+        probeProc.host
+      )
       probeProc.nodeId = ""
+      probeProc.host = ""
       Qt.callLater(function() { root.maybeStartProbes() })
     }
   }
@@ -355,7 +451,11 @@ Item {
     interval: Lattice.POLL_MS
     running: root.opened
     repeat: true
-    onTriggered: root.refreshFacts()
+    onTriggered: {
+      root.refreshFacts()
+      root.expireHungProbes()
+      root.maybeStartProbes()
+    }
   }
 
   PanelWindow {
@@ -655,7 +755,19 @@ Item {
           width: parent.width
           visible: !!(root.selectedNode && root.selectedNode.role === "local" && root.selectedNode.hermes)
           textFormat: Text.PlainText
-          text: "hermes · DETECTED — no remote agent status"
+          text: "hermes · DETECTED — local home only, no remote agent status"
+          color: root.foreground
+          opacity: 0.5
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.WordWrap
+        }
+
+        Text {
+          width: parent.width
+          visible: !!(root.selectedNode && root.selectedNode.role === "peer")
+          textFormat: Text.PlainText
+          text: String((root.selectedNode && root.selectedNode.hermesNote) || Lattice.remoteHermesNote())
           color: root.foreground
           opacity: 0.5
           font.family: root.fontFamily

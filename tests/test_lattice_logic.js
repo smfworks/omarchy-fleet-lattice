@@ -51,6 +51,7 @@ assert.strictEqual(local.load.ok, true);
 assert.ok(local.detail.indexOf("Linux") !== -1);
 assert.ok(local.detail.indexOf("0.12") !== -1);
 assert.strictEqual(local.hermes, "");
+assert.notStrictEqual(local.reachable, true, "local LIVE is facts, not a ping");
 assert.strictEqual(liveLocal.mode, "demo", "demo peers keep the fleet chip DEMO even when local is LIVE");
 assert.ok(liveLocal.honesty.indexOf("local LIVE") !== -1);
 assert.ok(liveLocal.honesty.indexOf("not online") !== -1);
@@ -255,6 +256,10 @@ assert.strictEqual(Lattice.modeLabel("err"), "ERR");
 assert.strictEqual(Lattice.modeLabel("stale"), "STALE");
 assert.strictEqual(Lattice.chipColor("LIVE"), "#3DDC97");
 assert.notStrictEqual(Lattice.chipColor("DEMO"), "#3DDC97");
+assert.strictEqual(Lattice.chipColor("UNKNOWN"), "#8B93A7");
+assert.strictEqual(Lattice.chipColor("STALE"), "#F5A524");
+assert.notStrictEqual(Lattice.chipColor("UNKNOWN"), Lattice.chipColor("STALE"));
+assert.notStrictEqual(Lattice.chipColor("UNKNOWN"), Lattice.chipColor("LIVE"));
 assert.strictEqual(Lattice.relativeTime(now, now), "just now");
 assert.strictEqual(Lattice.relativeTime(now - 15000, now), "15s ago");
 assert.strictEqual(Lattice.wrapIndex(0, 5, -1), 4);
@@ -268,10 +273,18 @@ assert.ok(overlay.includes("Qt.Key_Escape"));
 assert.ok(overlay.includes("fleet.json"));
 assert.ok(!overlay.includes("omarchy.fleet"));
 assert.ok(!overlay.includes("online by default"));
+assert.ok(overlay.includes("classifyConfigLoadError"));
+assert.ok(overlay.includes("expireHungProbes"));
+assert.ok(overlay.includes("UNREADABLE"));
+assert.ok(overlay.includes("configStatProc"));
+assert.ok(overlay.includes("hermes · not checked") || overlay.includes("remoteHermesNote"));
 
 const bar = fs.readFileSync(path.join(__dirname, "..", "BarWidget.qml"), "utf8");
 assert.ok(bar.includes("moduleName: \"smf.fleet-lattice\""));
 assert.ok(bar.includes("omarchy-shell shell toggle smf.fleet-lattice '{}'"));
+assert.ok(bar.includes("LatticeLogic.js"));
+assert.ok(bar.includes("readShared"));
+assert.ok(bar.includes("modeChip"));
 
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
 assert.strictEqual(manifest.id, "smf.fleet-lattice");
@@ -291,7 +304,8 @@ const files = [
   "fleet.example.json",
   "LICENSE",
   "README.md",
-  "preview/index.html"
+  "preview/index.html",
+  "docs/OPPOSITION.md"
 ];
 files.forEach(function(rel) {
   const full = path.join(__dirname, "..", rel);
@@ -316,8 +330,202 @@ assert.ok(readme.includes("omarchy-orbit-dock"));
 assert.ok(readme.includes("omarchy-aegis-gate"));
 assert.ok(readme.includes("omarchy-ghost-trace"));
 assert.ok(readme.includes("runner-up") || readme.includes("runners-up") || readme.includes("shortlist"));
+assert.ok(readme.includes("docs/OPPOSITION.md"));
+assert.ok(readme.includes("not offline") || readme.includes("Not offline"));
+assert.ok(readme.includes("green fleet"));
+assert.ok(readme.includes("not checked"));
 
 assert.ok(!src.includes("pgrep"));
 assert.ok(!src.includes("online: true"));
+
+const missing = Lattice.buildFleet({ now: now, localFacts: localFacts() });
+assert.strictEqual(missing.missingConfig, true);
+assert.ok(missing.honesty.indexOf("NO CONFIG") !== -1);
+assert.ok(missing.hint.indexOf("no fleet.json") !== -1);
+
+const forcedDemo = Lattice.buildFleet({
+  now: now,
+  localFacts: localFacts(),
+  config: arrayCfg,
+  forceDemo: true
+});
+assert.strictEqual(forcedDemo.forceDemo, true);
+assert.ok(forcedDemo.honesty.indexOf("DEMO forced") !== -1);
+assert.ok(forcedDemo.hint.indexOf("demo forced") !== -1);
+
+const unreadable = Lattice.classifyConfigLoadError("Permission denied");
+assert.strictEqual(unreadable.missing, false);
+assert.strictEqual(unreadable.ok, false);
+const absent = Lattice.classifyConfigLoadError("FileNotFound");
+assert.strictEqual(absent.missing, true);
+assert.strictEqual(absent.ok, true);
+const silentMiss = Lattice.classifyConfigLoadError("");
+assert.strictEqual(silentMiss.missing, true);
+
+const unreadFleet = Lattice.buildFleet({
+  now: now,
+  localFacts: localFacts(),
+  config: { ok: false, error: "fleet.json unreadable", nodes: [], source: "config" }
+});
+assert.strictEqual(unreadFleet.mode, "err");
+assert.strictEqual(unreadFleet.chip, "ERR");
+
+const mixedCfg = Lattice.parseConfig(JSON.stringify({
+  probe: true,
+  nodes: [
+    { id: "mikesai1", label: "mikesai1", host: "mikesai1.local" },
+    { id: "lab-edge", label: "lab-edge", host: "lab-edge.lan" }
+  ]
+}));
+const mixed = Lattice.buildFleet({
+  now: now,
+  localFacts: localFacts(),
+  config: mixedCfg,
+  probes: { mikesai1: { ok: true, method: "ping", at: now, host: "mikesai1.local" } }
+});
+assert.strictEqual(mixed.mode, "unknown", "one LIVE peer does not green the fleet");
+assert.strictEqual(mixed.chip, "UNKNOWN");
+assert.strictEqual(mixed.allConfiguredLive, false);
+assert.ok(mixed.honesty.indexOf("not a green fleet") !== -1);
+assert.ok(mixed.hint.indexOf("not a green fleet") !== -1);
+assert.ok(Lattice.fleetHonest(mixed));
+const mixedLive = mixed.nodes.find(function(n) { return n.id === "mikesai1"; });
+const mixedWait = mixed.nodes.find(function(n) { return n.id === "lab-edge"; });
+assert.strictEqual(mixedLive.chip, "LIVE");
+assert.strictEqual(mixedWait.chip, "UNKNOWN");
+assert.ok(mixed.edges.some(function(e) { return e.to === "mikesai1" && e.kind === "live"; }));
+assert.ok(mixed.edges.every(function(e) { return e.to !== "lab-edge" || e.kind !== "live"; }));
+
+const allLive = Lattice.buildFleet({
+  now: now,
+  localFacts: localFacts(),
+  config: mixedCfg,
+  probes: {
+    mikesai1: { ok: true, method: "ping", at: now, host: "mikesai1.local" },
+    "lab-edge": { ok: true, method: "ping", at: now, host: "lab-edge.lan" }
+  }
+});
+assert.strictEqual(allLive.mode, "live");
+assert.strictEqual(allLive.chip, "LIVE");
+assert.ok(allLive.allConfiguredLive);
+assert.ok(Lattice.fleetHonest(allLive));
+
+const pending = Lattice.applyProbe(
+  Lattice.peerNode({ id: "lab-edge", label: "lab-edge", host: "lab-edge.lan", source: "config" }),
+  { pending: true, method: "ping", at: now },
+  now,
+  300000
+);
+assert.strictEqual(pending.chip, "UNKNOWN");
+assert.ok(pending.status.indexOf("in flight") !== -1);
+assert.ok(pending.detail.indexOf("not offline") !== -1);
+
+const hung = Lattice.applyProbe(
+  Lattice.peerNode({ id: "lab-edge", label: "lab-edge", host: "lab-edge.lan", source: "config" }),
+  { pending: true, method: "ping", at: now - 20000 },
+  now,
+  300000
+);
+assert.strictEqual(hung.chip, "ERR", "a launched probe that never returns is ERR");
+assert.ok(hung.status.indexOf("timed out") !== -1);
+
+const startFail = Lattice.applyProbe(
+  Lattice.peerNode({ id: "lab-edge", label: "lab-edge", host: "lab-edge.lan", source: "config" }),
+  { ok: false, method: "ping", error: "probe failed to start", at: now },
+  now,
+  300000
+);
+assert.strictEqual(startFail.chip, "ERR");
+
+const staleNode = Lattice.applyProbe(
+  Lattice.peerNode({ id: "lab-edge", label: "lab-edge", host: "lab-edge.lan", source: "config" }),
+  { ok: true, method: "ping", at: now - 400000, host: "lab-edge.lan" },
+  now,
+  300000
+);
+assert.strictEqual(Lattice.edgeKind(staleNode), "stale");
+assert.strictEqual(Lattice.edgeStroke("stale").dash, true);
+assert.strictEqual(Lattice.edgeStroke("live").dash, false);
+const staleFleet = Lattice.buildFleet({
+  now: now,
+  localFacts: localFacts(),
+  config: mixedCfg,
+  probes: {
+    mikesai1: { ok: true, method: "ping", at: now - 400000, host: "mikesai1.local" },
+    "lab-edge": { ok: false, method: "ping", at: now - 400000, host: "lab-edge.lan", error: "timeout" }
+  }
+});
+assert.strictEqual(staleFleet.mode, "stale");
+assert.ok(staleFleet.edges.every(function(e) { return e.kind === "stale"; }));
+assert.ok(staleFleet.edges.every(function(e) { return e.kind !== "live"; }));
+assert.ok(Lattice.fleetHonest(staleFleet));
+assert.ok(staleFleet.honesty.indexOf("last-seen") !== -1);
+
+const leftoverHost = Lattice.buildFleet({
+  now: now,
+  localFacts: localFacts(),
+  config: Lattice.parseConfig(JSON.stringify({
+    probe: true,
+    nodes: [{ id: "mikesai1", label: "mikesai1", host: "mikesai1.lan" }]
+  })),
+  probes: { mikesai1: { ok: true, method: "ping", at: now, host: "mikesai1.local" } }
+});
+const leftoverPeer = leftoverHost.nodes.find(function(n) { return n.id === "mikesai1"; });
+assert.strictEqual(leftoverPeer.chip, "UNKNOWN", "leftover ping for a rewritten host is not LIVE");
+assert.notStrictEqual(leftoverPeer.reachable, true);
+
+const dueFresh = Lattice.probeDue(
+  leftoverPeer,
+  { ok: true, at: now, host: leftoverPeer.host },
+  now,
+  300000
+);
+assert.strictEqual(dueFresh, false);
+assert.ok(Lattice.probeDue(leftoverPeer, null, now, 300000));
+assert.ok(Lattice.probeDue(leftoverPeer, { pending: true, at: now - 20000 }, now, 300000));
+
+const remoteNote = Lattice.peerNode({ id: "x", label: "x", host: "x", source: "config" });
+assert.strictEqual(remoteNote.hermes, "");
+assert.ok(remoteNote.hermesNote.indexOf("not checked") !== -1);
+assert.ok(Lattice.neverInventedRemoteHermes(remoteNote));
+const invented = Lattice.clampHonestNode({
+  id: "x", role: "peer", label: "x", host: "x", source: "config",
+  presence: "unknown", chip: "UNKNOWN", hermes: "DETECTED", reachable: null
+});
+assert.strictEqual(invented.hermes, "");
+assert.ok(invented.hermesNote.indexOf("not checked") !== -1);
+assert.ok(Lattice.neverInventedRemoteHermes(invented));
+
+Lattice.writeShared(mixed);
+const snap = Lattice.readShared();
+assert.strictEqual(snap.chip, "UNKNOWN");
+assert.ok(snap.count >= 2);
+assert.ok(snap.honesty.indexOf("not a green fleet") !== -1);
+
+const preview = fs.readFileSync(path.join(__dirname, "..", "preview/index.html"), "utf8");
+assert.ok(preview.includes("#8B93A7"));
+assert.ok(!preview.includes("rgba(61, 220, 151"));
+assert.ok(preview.includes("not a green fleet"));
+assert.ok(preview.includes("hermes · not checked (local only)"));
+assert.ok(preview.includes("NO CONFIG"));
+
+const opposition = fs.readFileSync(path.join(__dirname, "..", "docs/OPPOSITION.md"), "utf8");
+assert.ok(opposition.includes("P0"));
+assert.ok(opposition.includes("P1"));
+assert.ok(opposition.includes("P2"));
+assert.ok(opposition.includes("Quick wins"));
+assert.ok(opposition.includes("DEMO"));
+assert.ok(opposition.includes("UNKNOWN"));
+assert.ok(opposition.includes("STALE"));
+assert.ok(opposition.includes("Hermes"));
+
+assert.ok(configured.hint.indexOf("waiting on probes") !== -1);
+assert.ok(configured.hint.indexOf("probes off") === -1);
+assert.ok(noProbe.hint.indexOf("probes off") !== -1);
+assert.ok(noProbe.nodes.some(function(n) {
+  return n.role === "peer" && n.status.indexOf("not offline") !== -1;
+}));
+
+assert.ok(!Lattice.fleetHonest(Object.assign({}, mixed, { chip: "LIVE", mode: "unknown" })));
 
 console.log("ok - LatticeLogic helpers");
