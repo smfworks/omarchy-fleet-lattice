@@ -54,6 +54,8 @@ assert.strictEqual(local.hermes, "");
 assert.strictEqual(liveLocal.mode, "demo", "demo peers keep the fleet chip DEMO even when local is LIVE");
 assert.ok(liveLocal.honesty.indexOf("local LIVE") !== -1);
 assert.ok(liveLocal.honesty.indexOf("not online") !== -1);
+assert.ok(Lattice.fleetHonest(liveLocal));
+assert.ok(liveLocal.edges.every(function(edge) { return edge.kind !== "live"; }));
 
 const hermesLocal = Lattice.localNode(localFacts({ hermesHome: true }));
 assert.strictEqual(hermesLocal.hermes, "DETECTED");
@@ -115,12 +117,18 @@ const configured = Lattice.buildFleet({
 });
 assert.strictEqual(configured.peerSource, "config");
 assert.strictEqual(configured.probesEnabled, true);
+assert.strictEqual(configured.mode, "unknown", "probes on with no hits is UNKNOWN, not a green fleet");
+assert.strictEqual(configured.chip, "UNKNOWN");
+assert.ok(configured.honesty.indexOf("waiting on opt-in probes") !== -1);
+assert.ok(configured.honesty.indexOf("probes off") === -1);
+assert.ok(Lattice.fleetHonest(configured));
 const cfgPeer = configured.nodes.find(function(n) { return n.id === "mikesai1"; });
 assert.ok(cfgPeer);
 assert.strictEqual(cfgPeer.chip, "UNKNOWN");
 assert.notStrictEqual(cfgPeer.reachable, true);
 assert.ok(cfgPeer.status.indexOf("UNKNOWN") !== -1);
 assert.ok(Lattice.neverPretendOnline(cfgPeer));
+assert.strictEqual(Lattice.honestChip(cfgPeer), "UNKNOWN");
 
 const noProbe = Lattice.buildFleet({
   now: now,
@@ -134,7 +142,10 @@ noProbe.nodes.filter(function(n) { return n.role === "peer"; }).forEach(function
   assert.strictEqual(node.chip, "UNKNOWN");
   assert.ok(node.status.indexOf("CONFIGURED") !== -1);
   assert.ok(Lattice.neverPretendOnline(node));
+  assert.strictEqual(Lattice.honestChip(node), "UNKNOWN");
 });
+assert.ok(Lattice.fleetHonest(noProbe));
+assert.ok(noProbe.edges.every(function(edge) { return edge.kind !== "live"; }));
 
 const probed = Lattice.buildFleet({
   now: now,
@@ -177,6 +188,22 @@ assert.strictEqual(broken.chip, "ERR");
 assert.ok(broken.nodes.some(function(n) { return n.chip === "DEMO"; }));
 assert.ok(broken.honesty.indexOf("DEMO peers") !== -1);
 
+const leakedProbes = Lattice.buildFleet({
+  now: now,
+  localFacts: localFacts(),
+  forceDemo: true,
+  config: objectCfg,
+  probes: { mikesai1: { ok: true, method: "ssh", at: now } }
+});
+assert.strictEqual(leakedProbes.mode, "demo");
+assert.strictEqual(leakedProbes.chip, "DEMO");
+assert.ok(Lattice.fleetHonest(leakedProbes));
+leakedProbes.nodes.filter(function(n) { return n.role === "peer"; }).forEach(function(node) {
+  assert.strictEqual(node.chip, "DEMO");
+  assert.notStrictEqual(node.reachable, true);
+  assert.ok(Lattice.neverPretendOnline(node));
+});
+
 const forced = Lattice.buildFleet({
   now: now,
   localFacts: localFacts(),
@@ -184,6 +211,10 @@ const forced = Lattice.buildFleet({
   forceDemo: true
 });
 assert.strictEqual(forced.mode, "demo");
+assert.ok(Lattice.fleetHonest(forced));
+assert.ok(Lattice.fleetHonest(empty));
+assert.ok(Lattice.fleetHonest(probed));
+assert.strictEqual(Lattice.chipColor(Lattice.honestChip({ demo: true, chip: "LIVE", presence: "live", reachable: true })), "#7DD3FC");
 assert.strictEqual(Lattice.parsePayload('{"demo":true}').forceDemo, true);
 assert.strictEqual(Lattice.parsePayload("not-json").forceDemo, false);
 assert.strictEqual(Lattice.parsePayload('{"selected":"mikesai1"}').selected, "mikesai1");

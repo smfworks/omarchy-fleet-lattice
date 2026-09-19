@@ -416,7 +416,7 @@ Item {
         required property var modelData
         readonly property bool on: String(modelData.id) === String(root.selectedId)
         readonly property real size: Style.space(modelData.role === "local" ? 118 : 86) * Number(modelData.scale || 1)
-        readonly property color tone: Lattice.chipColor(modelData.chip)
+        readonly property color tone: Lattice.chipColor(Lattice.honestChip(modelData))
 
         width: nodeBody.size
         height: nodeBody.size + Style.space(28)

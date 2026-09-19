@@ -409,6 +409,32 @@ function neverPretendOnline(node) {
   return true
 }
 
+function honestChip(node) {
+  if (!node) return "UNKNOWN"
+  if (node.role === "local") return node.chip === "LIVE" ? "LIVE" : "UNKNOWN"
+  if (node.demo === true || node.source === "demo" || node.presence === "demo")
+    return "DEMO"
+  if (node.reachable === true && node.presence === "live") return "LIVE"
+  if (node.presence === "err") return "ERR"
+  if (node.presence === "stale") return "STALE"
+  return "UNKNOWN"
+}
+
+function clampHonestNode(node) {
+  var copy = cloneNode(node)
+  if (!copy) return null
+  copy.chip = honestChip(copy)
+  if (copy.chip === "DEMO") {
+    copy.presence = "demo"
+    copy.reachable = null
+    copy.demo = true
+    if (!copy.status) copy.status = "DEMO sample · not online"
+  }
+  if (copy.role !== "local" && copy.chip !== "LIVE")
+    copy.reachable = copy.chip === "ERR" ? false : null
+  return copy
+}
+
 function applyProbe(node, result, now, staleAfterMs) {
   var copy = cloneNode(node)
   if (!copy) return null
@@ -605,11 +631,9 @@ function fleetMode(fleet) {
   if (fleet.probesEnabled && fleet.probeStale) return "stale"
   if (fleet.probesEnabled && fleet.error && !fleet.anyReachable) return "err"
   if (fleet.probesEnabled && fleet.anyReachable) return "live"
-  if (fleet.peerSource === "config" || fleet.peerSource === "env") {
-    if (fleet.probesEnabled) return fleet.localLive ? "live" : "unknown"
+  if (fleet.peerSource === "config" || fleet.peerSource === "env")
     return "unknown"
-  }
-  return fleet.localLive ? "live" : "demo"
+  return "demo"
 }
 
 function honestyLine(fleet) {
@@ -628,10 +652,35 @@ function honestyLine(fleet) {
   if (mode === "stale")
     return "STALE · last opt-in probe aged out · not a current online map"
   if (mode === "unknown")
-    return "UNKNOWN reachability · " + peers + " CONFIGURED · probes off · local " + (fleet.localLive ? "LIVE" : "UNKNOWN")
+    return fleet.probesEnabled
+      ? "UNKNOWN reachability · " + peers + " CONFIGURED · waiting on opt-in probes · local " + (fleet.localLive ? "LIVE" : "UNKNOWN")
+      : "UNKNOWN reachability · " + peers + " CONFIGURED · probes off · local " + (fleet.localLive ? "LIVE" : "UNKNOWN")
   if (fleet.probesEnabled)
     return "LIVE local" + (fleet.anyReachable ? " · probe hits" : " · probes on") + " · " + peers + " configured"
   return "LIVE local · " + peers + " CONFIGURED"
+}
+
+function fleetHonest(fleet) {
+  fleet = fleet || emptyFleet()
+  var mode = fleetMode(fleet)
+  var nodes = fleet.nodes || []
+  var edges = fleet.edges || []
+  var i
+  for (i = 0; i < nodes.length; i++) {
+    var node = nodes[i]
+    if (node.role === "local") continue
+    if (!neverPretendOnline(node)) return false
+    if (honestChip(node) !== node.chip) return false
+    if ((mode === "demo" || mode === "unknown") && node.chip === "LIVE") return false
+    if ((mode === "demo" || mode === "unknown") && node.reachable === true) return false
+    if (mode === "demo" && node.chip !== "DEMO") return false
+  }
+  for (i = 0; i < edges.length; i++) {
+    if ((mode === "demo" || mode === "unknown") && edges[i].kind === "live") return false
+  }
+  if (mode === "demo" && fleet.chip !== "DEMO") return false
+  if (mode === "unknown" && fleet.chip !== "UNKNOWN") return false
+  return true
 }
 
 function catalogHint(fleet) {
@@ -703,9 +752,9 @@ function buildFleet(opts) {
         node.detail = "opt-in probes enabled · no result yet"
       }
     }
-    peers.push(node)
+    peers.push(clampHonestNode(node))
   }
-  var nodes = [local].concat(peers)
+  var nodes = [clampHonestNode(local)].concat(peers)
   var anyReachable = false
   var probeStale = false
   var probeSeen = false

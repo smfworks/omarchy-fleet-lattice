@@ -95,9 +95,9 @@ The honesty chip is labeled so a screenshot is self-describing:
 - **DEMO** — no `fleet.json` / env peers (or `{"demo":true}`). A curated sample
   lattice still fills the HUD (`mikesai1` / `mikesai6` / `lab-edge` / …).
   DEMO peers are **never** treated as online
-- **LIVE** — local hostname / `uname` / load were actually read, and (when
-  probes are on) a fresh opt-in probe succeeded. LIVE on the local node does
-  **not** make DEMO or unprobed peers green
+- **LIVE** — a node-level LIVE is local facts we actually read, or a fresh
+  opt-in probe hit. The fleet chip stays **UNKNOWN** until a probe succeeds;
+  LIVE on the local node does **not** make DEMO or unprobed peers green
 - **UNKNOWN** — peers from config/env with probes off. Status is
   **CONFIGURED / UNKNOWN**, not online
 - **ERR** — `fleet.json` is unreadable, or an opt-in probe failed. The HUD
