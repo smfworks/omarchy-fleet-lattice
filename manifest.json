@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "smf.fleet-lattice",
+  "name": "Fleet Lattice",
+  "version": "0.1.0",
+  "author": "SMF Works",
+  "license": "MIT",
+  "description": "Fullscreen sci-fi multi-machine node graph: local host plus peer Omarchy boxes. A fleet command hologram overlay.",
+  "kinds": ["overlay", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "Overlay.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Fleet Lattice",
+    "description": "Summons the fleet node graph. Count is nodes on the lattice, not invented online hosts.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
