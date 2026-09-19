@@ -1,0 +1,10 @@
+{
+  "probe": false,
+  "probeMethod": "ping",
+  "staleAfterMs": 300000,
+  "nodes": [
+    { "id": "mikesai1", "label": "mikesai1", "host": "mikesai1.local" },
+    { "id": "mikesai6", "label": "mikesai6", "host": "mikesai6.local" },
+    { "id": "lab-edge", "label": "lab-edge", "host": "lab-edge.lan" }
+  ]
+}

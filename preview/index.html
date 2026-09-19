@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fleet Lattice — HUD preview</title>
+  <style>
+    :root {
+      --fg: #e8eefc;
+      --accent: #7dd3fc;
+      --live: #3DDC97;
+      --warn: #F5A524;
+      --err: #FF4D6D;
+      --demo: #7DD3FC;
+      --muted: #8B93A7;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #04070d; color: var(--fg); font-family: ui-sans-serif, "Segoe UI", sans-serif; }
+    body { display: grid; grid-template-rows: auto 1fr; }
+    body.hud { grid-template-rows: 1fr; }
+    body.hud .toolbar { display: none; }
+    .toolbar {
+      display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+      padding: 12px 16px; background: #0b1220; border-bottom: 1px solid #1c2740;
+      font-size: 13px; z-index: 4;
+    }
+    button, .chip {
+      border: 1px solid #2a3a58; background: #121a2c; color: var(--fg);
+      border-radius: 999px; padding: 6px 12px; cursor: pointer;
+    }
+    button.active { border-color: var(--accent); color: var(--accent); }
+    .stage {
+      position: relative; overflow: hidden;
+      background: radial-gradient(ellipse at 46% 52%, #12203a 0%, #070b14 58%, #04070d 100%);
+    }
+    canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .honesty {
+      position: absolute; top: 22px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 10px; align-items: center;
+      background: rgba(12, 18, 32, 0.86); border: 1px solid rgba(125, 211, 252, 0.55);
+      border-radius: 999px; padding: 8px 16px; font-size: 13px;
+      white-space: nowrap; z-index: 3;
+    }
+    .honesty .mode {
+      border-radius: 999px; padding: 2px 10px; font-weight: 700; letter-spacing: 0.12em;
+      border: 1px solid;
+    }
+    .nodes { position: absolute; inset: 0; z-index: 2; }
+    .node {
+      position: absolute; width: 92px; text-align: center; transform: translate(-50%, -50%);
+      cursor: pointer;
+    }
+    .node.local { width: 118px; }
+    .disc {
+      width: 72px; height: 72px; margin: 0 auto 6px; border-radius: 50%;
+      display: grid; place-items: center;
+      border: 1px solid rgba(125,211,252,0.45);
+      background: rgba(12, 18, 32, 0.55);
+      box-shadow: 0 0 24px rgba(125, 211, 252, 0.12);
+    }
+    .node.local .disc {
+      width: 96px; height: 96px;
+      box-shadow: 0 0 36px rgba(61, 220, 151, 0.28);
+    }
+    .node.on .disc { transform: scale(1.08); box-shadow: 0 0 40px currentColor; }
+    .hex {
+      width: 54%; height: 54%;
+      clip-path: polygon(25% 6%, 75% 6%, 100% 50%, 75% 94%, 25% 94%, 0 50%);
+      border: 2px solid currentColor; background: transparent;
+    }
+    .node .chip {
+      font-size: 11px; letter-spacing: 0.12em; font-weight: 700; padding: 2px 8px;
+    }
+    .node .label { font-size: 12px; opacity: 0.86; }
+    .rail {
+      position: absolute; right: 28px; top: 50%; transform: translateY(-50%);
+      width: min(320px, 30vw); min-height: 420px;
+      background: rgba(10, 16, 30, 0.82);
+      border: 1px solid rgba(125, 211, 252, 0.4);
+      border-radius: 22px; padding: 22px; z-index: 3;
+    }
+    .brand { color: var(--accent); letter-spacing: 0.22em; font-size: 12px; font-weight: 700; }
+    h1 { margin: 12px 0 10px; font-size: 28px; }
+    .status, .detail, .hint, .footer { opacity: 0.7; font-size: 13px; line-height: 1.45; }
+    .footer {
+      position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
+      letter-spacing: 0.08em; z-index: 3;
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <strong>Fleet Lattice preview</strong>
+    <button data-scene="demo">DEMO lattice</button>
+    <button data-scene="unknown">CONFIGURED / UNKNOWN</button>
+    <button data-scene="live">LIVE local + probe</button>
+    <button data-scene="err">ERR config</button>
+    <button data-scene="stale">STALE probe</button>
+  </div>
+  <div class="stage" id="stage">
+    <canvas id="field"></canvas>
+    <div class="honesty" id="honesty"></div>
+    <div class="nodes" id="nodes"></div>
+    <aside class="rail" id="rail"></aside>
+    <div class="footer" id="footer">ESC close · click a node for detail · DEMO peers are never online</div>
+  </div>
+  <script>
+    const colors = { LIVE: "#3DDC97", DEMO: "#7DD3FC", UNKNOWN: "#F5A524", ERR: "#FF4D6D", STALE: "#F5A524" };
+    const scenes = {
+      demo: {
+        mode: "DEMO",
+        honesty: "DEMO fleet · local LIVE · peers are samples, not online",
+        hint: "demo lattice · no fleet.json",
+        nodes: [
+          { id: "local", role: "local", label: "mikesai6", host: "mikesai6", chip: "LIVE", status: "LIVE local facts", detail: "Linux 6.12 · load 0.12 0.08 0.05", x: 0.46, y: 0.52 },
+          { id: "mikesai1", label: "mikesai1", host: "mikesai1.local", chip: "DEMO", status: "DEMO sample · not online", detail: "curated sample node — never treated as reachable", x: 0.46, y: 0.30 },
+          { id: "lab-edge", label: "lab-edge", host: "lab-edge.lan", chip: "DEMO", status: "DEMO sample · not online", detail: "curated sample node — never treated as reachable", x: 0.64, y: 0.41 },
+          { id: "yard-core", label: "yard-core", host: "yard-core.lan", chip: "DEMO", status: "DEMO sample · not online", detail: "curated sample node — never treated as reachable", x: 0.58, y: 0.68 },
+          { id: "relay-west", label: "relay-west", host: "relay-west.lan", chip: "DEMO", status: "DEMO sample · not online", detail: "curated sample node — never treated as reachable", x: 0.32, y: 0.66 },
+          { id: "mikesai6-peer", label: "mikesai6-lab", host: "mikesai6.lan", chip: "DEMO", status: "DEMO sample · not online", detail: "curated sample node — never treated as reachable", x: 0.28, y: 0.38 }
+        ]
+      },
+      unknown: {
+        mode: "UNKNOWN",
+        honesty: "UNKNOWN reachability · 3 CONFIGURED · probes off · local LIVE",
+        hint: "configured lattice · probes off",
+        nodes: [
+          { id: "local", role: "local", label: "mikesai6", host: "mikesai6", chip: "LIVE", status: "LIVE local facts", detail: "Linux 6.12 · load 0.12 0.08 0.05", x: 0.46, y: 0.52 },
+          { id: "mikesai1", label: "mikesai1", host: "mikesai1.local", chip: "UNKNOWN", status: "CONFIGURED · UNKNOWN reachability", detail: "listed in fleet.json · probes off", x: 0.46, y: 0.30 },
+          { id: "lab-edge", label: "lab-edge", host: "lab-edge.lan", chip: "UNKNOWN", status: "CONFIGURED · UNKNOWN reachability", detail: "listed in fleet.json · probes off", x: 0.66, y: 0.58 },
+          { id: "yard-core", label: "yard-core", host: "yard.lan", chip: "UNKNOWN", status: "CONFIGURED · UNKNOWN reachability", detail: "listed in fleet.json · probes off", x: 0.28, y: 0.62 }
+        ]
+      },
+      live: {
+        mode: "LIVE",
+        honesty: "LIVE local · probe hits · 2 configured",
+        hint: "opt-in probes",
+        nodes: [
+          { id: "local", role: "local", label: "mikesai6", host: "mikesai6", chip: "LIVE", status: "LIVE local facts", detail: "Linux 6.12 · load 0.12 0.08 0.05 · hermes DETECTED", x: 0.46, y: 0.52, hermes: true },
+          { id: "mikesai1", label: "mikesai1", host: "mikesai1.local", chip: "LIVE", status: "LIVE · probe ping", detail: "opt-in ping succeeded", last: "just now", x: 0.46, y: 0.30 },
+          { id: "lab-edge", label: "lab-edge", host: "lab-edge.lan", chip: "ERR", status: "ERR · probe failed", detail: "opt-in ping timed out", last: "3s ago", x: 0.66, y: 0.58 }
+        ]
+      },
+      err: {
+        mode: "ERR",
+        honesty: "ERR · fleet.json is not valid JSON · DEMO peers, not online",
+        hint: "config error · demo lattice",
+        nodes: [
+          { id: "local", role: "local", label: "mikesai6", host: "mikesai6", chip: "LIVE", status: "LIVE local facts", detail: "Linux 6.12 · load 0.12 0.08 0.05", x: 0.46, y: 0.52 },
+          { id: "mikesai1", label: "mikesai1", host: "mikesai1.local", chip: "DEMO", status: "DEMO sample · not online", detail: "shown because fleet.json failed to parse", x: 0.46, y: 0.30 },
+          { id: "lab-edge", label: "lab-edge", host: "lab-edge.lan", chip: "DEMO", status: "DEMO sample · not online", detail: "shown because fleet.json failed to parse", x: 0.64, y: 0.62 }
+        ]
+      },
+      stale: {
+        mode: "STALE",
+        honesty: "STALE · last opt-in probe aged out · not a current online map",
+        hint: "stale probes · last-seen only",
+        nodes: [
+          { id: "local", role: "local", label: "mikesai6", host: "mikesai6", chip: "LIVE", status: "LIVE local facts", detail: "Linux 6.12 · load 0.12 0.08 0.05", x: 0.46, y: 0.52 },
+          { id: "mikesai1", label: "mikesai1", host: "mikesai1.local", chip: "STALE", status: "STALE · last probe 8m ago", detail: "probe succeeded earlier · not a current reachability claim", last: "8m ago", x: 0.46, y: 0.30 },
+          { id: "lab-edge", label: "lab-edge", host: "lab-edge.lan", chip: "STALE", status: "STALE · last failed probe 8m ago", detail: "timeout · result is old", last: "8m ago", x: 0.66, y: 0.58 }
+        ]
+      }
+    };
+
+    const params = new URLSearchParams(location.search);
+    if (params.get("hud") === "1") document.body.classList.add("hud");
+    let current = params.get("scene") || "demo";
+    let selected = "local";
+    let phase = 0;
+
+    function hexPoints(cx, cy, radius, rotation) {
+      const pts = [];
+      for (let i = 0; i < 6; i++) {
+        const a = (rotation || 0) + i * Math.PI / 3;
+        pts.push([cx + radius * Math.cos(a), cy + radius * Math.sin(a)]);
+      }
+      return pts;
+    }
+
+    function render(name) {
+      current = name;
+      const scene = scenes[name] || scenes.demo;
+      if (!scene.nodes.some((n) => n.id === selected)) selected = "local";
+      document.querySelectorAll(".toolbar button[data-scene]").forEach((b) => b.classList.toggle("active", b.dataset.scene === name));
+      const tone = colors[scene.mode] || colors.DEMO;
+      document.getElementById("honesty").innerHTML =
+        `<span class="mode" style="color:${tone};border-color:${tone}">${scene.mode}</span> ${scene.honesty}`;
+      const node = scene.nodes.find((n) => n.id === selected) || scene.nodes[0];
+      document.getElementById("rail").innerHTML = `
+        <div class="brand">FLEET LATTICE</div>
+        <h1>${node.label}</h1>
+        <div class="chip" style="color:${colors[node.chip]};border-color:${colors[node.chip]}">${node.chip}</div>
+        <p class="status">host · ${node.host}</p>
+        <p class="status">${node.status}</p>
+        <p class="detail">${node.detail}</p>
+        ${node.last ? `<p class="detail">last probe · ${node.last}</p>` : ""}
+        ${node.hermes ? `<p class="detail">hermes · DETECTED — no remote agent status</p>` : ""}
+        <p class="hint">${scene.hint}</p>
+      `;
+      const stage = document.getElementById("stage");
+      const w = stage.clientWidth, h = stage.clientHeight;
+      document.getElementById("nodes").innerHTML = scene.nodes.map((n) => {
+        const color = colors[n.chip];
+        const x = n.x * w + Math.sin(phase * 0.7 + n.x * 8) * 6;
+        const y = n.y * h + Math.cos(phase * 0.55 + n.y * 8) * 5;
+        return `<div class="node ${n.role === "local" ? "local" : ""} ${n.id === selected ? "on" : ""}" data-id="${n.id}" style="left:${x}px;top:${y}px;color:${color}">
+          <div class="disc"><div class="hex"></div></div>
+          <div class="chip">${n.chip}</div>
+          <div class="label">${n.label}</div>
+        </div>`;
+      }).join("");
+      document.querySelectorAll(".node").forEach((el) => el.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        selected = el.dataset.id;
+        render(current);
+      }));
+      paint();
+    }
+
+    function paint() {
+      const canvas = document.getElementById("field");
+      const stage = document.getElementById("stage");
+      const dpr = devicePixelRatio || 1;
+      canvas.width = stage.clientWidth * dpr;
+      canvas.height = stage.clientHeight * dpr;
+      const ctx = canvas.getContext("2d");
+      const w = canvas.width, h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      ctx.strokeStyle = "rgba(125,211,252,0.08)";
+      ctx.lineWidth = 1;
+      const hexR = Math.min(w, h) * 0.055;
+      for (let i = -2; i < 18; i++) {
+        for (let j = -2; j < 16; j++) {
+          const hx = (j % 2 === 0 ? 0 : hexR * 0.86) + i * hexR * 1.72;
+          const hy = j * hexR * 1.5 + (phase * 18) % (hexR * 1.5);
+          const pts = hexPoints(hx, hy, hexR * 0.92, Math.PI / 6);
+          ctx.beginPath();
+          ctx.moveTo(pts[0][0], pts[0][1]);
+          pts.slice(1).forEach((p) => ctx.lineTo(p[0], p[1]));
+          ctx.closePath();
+          ctx.stroke();
+        }
+      }
+      const scene = scenes[current];
+      const local = scene.nodes.find((n) => n.role === "local");
+      scene.nodes.forEach((n) => {
+        if (n.role === "local") return;
+        ctx.beginPath();
+        ctx.strokeStyle = colors[n.chip] + (n.chip === "LIVE" ? "b8" : "55");
+        ctx.lineWidth = n.chip === "LIVE" ? 2.4 : 1.3;
+        ctx.setLineDash(n.chip === "LIVE" ? [] : [8, 10]);
+        ctx.moveTo(local.x * w, local.y * h);
+        ctx.lineTo(n.x * w, n.y * h);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      });
+    }
+
+    document.querySelectorAll("[data-scene]").forEach((b) => b.addEventListener("click", () => render(b.dataset.scene)));
+    document.getElementById("stage").addEventListener("click", (ev) => {
+      if (ev.target === document.getElementById("stage") || ev.target.id === "field") {
+        /* backdrop click is dismiss in the real overlay; preview keeps the HUD */
+      }
+    });
+    window.addEventListener("resize", () => render(current));
+    window.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") document.getElementById("footer").textContent = "ESC would close the Omarchy overlay";
+      if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
+        const nodes = scenes[current].nodes;
+        const idx = Math.max(0, nodes.findIndex((n) => n.id === selected));
+        selected = nodes[(idx + (ev.key === "ArrowRight" ? 1 : nodes.length - 1)) % nodes.length].id;
+        render(current);
+      }
+    });
+    setInterval(() => { phase += 0.03; render(current); }, 80);
+    render(current);
+  </script>
+</body>
+</html>
