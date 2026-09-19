@@ -205,7 +205,7 @@ Item {
     var j
     var phase = root.driftPhase
     ctx.lineWidth = 1
-    ctx.strokeStyle = cssColor(root.accent, 0.07)
+    ctx.strokeStyle = cssColor(root.accent, 0.12)
     var hexR = Math.min(w, h) * 0.055
     for (i = -2; i < 16; i++) {
       for (j = -2; j < 14; j++) {
