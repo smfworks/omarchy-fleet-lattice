@@ -12,6 +12,7 @@
       --warn: #F5A524;
       --err: #FF4D6D;
       --demo: #7DD3FC;
+      --unknown: #8B93A7;
       --muted: #8B93A7;
     }
     * { box-sizing: border-box; }
@@ -33,7 +34,6 @@
       position: relative; overflow: hidden;
       background:
         radial-gradient(ellipse at 46% 52%, rgba(36, 82, 140, 0.38) 0%, rgba(7, 11, 20, 0.2) 42%, #04070d 78%),
-        radial-gradient(circle at 70% 20%, rgba(61, 220, 151, 0.08), transparent 28%),
         #050914;
     }
     canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -98,7 +98,7 @@
     <strong>Fleet Lattice preview</strong>
     <button data-scene="demo">DEMO lattice</button>
     <button data-scene="unknown">CONFIGURED / UNKNOWN</button>
-    <button data-scene="live">LIVE local + probe</button>
+    <button data-scene="live">mixed probes</button>
     <button data-scene="err">ERR config</button>
     <button data-scene="stale">STALE probe</button>
   </div>
@@ -107,15 +107,15 @@
     <div class="honesty" id="honesty"></div>
     <div class="nodes" id="nodes"></div>
     <aside class="rail" id="rail"></aside>
-    <div class="footer" id="footer">ESC close · click a node for detail · DEMO peers are never online</div>
+    <div class="footer" id="footer">ESC close · click a node for detail · do not trust this graph as fleet status</div>
   </div>
   <script>
-    const colors = { LIVE: "#3DDC97", DEMO: "#7DD3FC", UNKNOWN: "#F5A524", ERR: "#FF4D6D", STALE: "#F5A524" };
+    const colors = { LIVE: "#3DDC97", DEMO: "#7DD3FC", UNKNOWN: "#8B93A7", ERR: "#FF4D6D", STALE: "#F5A524" };
     const scenes = {
       demo: {
         mode: "DEMO",
-        honesty: "DEMO fleet · local LIVE · peers are samples, not online",
-        hint: "demo lattice · no fleet.json",
+        honesty: "NO CONFIG · DEMO samples, not your fleet · local LIVE · peers are samples, not online",
+        hint: "no fleet.json · demo samples",
         nodes: [
           { id: "local", role: "local", label: "mikesai6", host: "mikesai6", chip: "LIVE", status: "LIVE local facts", detail: "Linux 6.12 · load 0.12 0.08 0.05", x: 0.46, y: 0.52 },
           { id: "mikesai1", label: "mikesai1", host: "mikesai1.local", chip: "DEMO", status: "DEMO sample · not online", detail: "curated sample node — never treated as reachable", x: 0.46, y: 0.30 },
@@ -127,19 +127,19 @@
       },
       unknown: {
         mode: "UNKNOWN",
-        honesty: "UNKNOWN reachability · 3 CONFIGURED · probes off · local LIVE",
-        hint: "configured lattice · probes off",
+        honesty: "UNKNOWN — not offline · 3 CONFIGURED · probes off · local LIVE",
+        hint: "configured lattice · probes off · not offline",
         nodes: [
           { id: "local", role: "local", label: "mikesai6", host: "mikesai6", chip: "LIVE", status: "LIVE local facts", detail: "Linux 6.12 · load 0.12 0.08 0.05", x: 0.46, y: 0.52 },
-          { id: "mikesai1", label: "mikesai1", host: "mikesai1.local", chip: "UNKNOWN", status: "CONFIGURED · UNKNOWN reachability", detail: "listed in fleet.json · probes off", x: 0.46, y: 0.30 },
-          { id: "lab-edge", label: "lab-edge", host: "lab-edge.lan", chip: "UNKNOWN", status: "CONFIGURED · UNKNOWN reachability", detail: "listed in fleet.json · probes off", x: 0.66, y: 0.58 },
-          { id: "yard-core", label: "yard-core", host: "yard.lan", chip: "UNKNOWN", status: "CONFIGURED · UNKNOWN reachability", detail: "listed in fleet.json · probes off", x: 0.28, y: 0.62 }
+          { id: "mikesai1", label: "mikesai1", host: "mikesai1.local", chip: "UNKNOWN", status: "CONFIGURED · UNKNOWN — not offline", detail: "listed in fleet.json · probes off · reachability not measured", x: 0.46, y: 0.30 },
+          { id: "lab-edge", label: "lab-edge", host: "lab-edge.lan", chip: "UNKNOWN", status: "CONFIGURED · UNKNOWN — not offline", detail: "listed in fleet.json · probes off · reachability not measured", x: 0.66, y: 0.58 },
+          { id: "yard-core", label: "yard-core", host: "yard.lan", chip: "UNKNOWN", status: "CONFIGURED · UNKNOWN — not offline", detail: "listed in fleet.json · probes off · reachability not measured", x: 0.28, y: 0.62 }
         ]
       },
       live: {
-        mode: "LIVE",
-        honesty: "LIVE local · probe hits · 2 configured",
-        hint: "opt-in probes",
+        mode: "UNKNOWN",
+        honesty: "1 LIVE probe · 1 still UNKNOWN/ERR — not a green fleet · local LIVE",
+        hint: "mixed probes · not a green fleet",
         nodes: [
           { id: "local", role: "local", label: "mikesai6", host: "mikesai6", chip: "LIVE", status: "LIVE local facts", detail: "Linux 6.12 · load 0.12 0.08 0.05 · hermes DETECTED", x: 0.46, y: 0.52, hermes: true },
           { id: "mikesai1", label: "mikesai1", host: "mikesai1.local", chip: "LIVE", status: "LIVE · probe ping", detail: "opt-in ping succeeded", last: "just now", x: 0.46, y: 0.30 },
@@ -158,8 +158,8 @@
       },
       stale: {
         mode: "STALE",
-        honesty: "STALE · last opt-in probe aged out · not a current online map",
-        hint: "stale probes · last-seen only",
+        honesty: "STALE · last opt-in probe aged out · last-seen only, not a current link",
+        hint: "stale probes · last-seen only · not a current link",
         nodes: [
           { id: "local", role: "local", label: "mikesai6", host: "mikesai6", chip: "LIVE", status: "LIVE local facts", detail: "Linux 6.12 · load 0.12 0.08 0.05", x: 0.46, y: 0.52 },
           { id: "mikesai1", label: "mikesai1", host: "mikesai1.local", chip: "STALE", status: "STALE · last probe 8m ago", detail: "probe succeeded earlier · not a current reachability claim", last: "8m ago", x: 0.46, y: 0.30 },
@@ -202,7 +202,8 @@
         <p class="status">${node.status}</p>
         <p class="detail">${node.detail}</p>
         ${node.last ? `<p class="detail">last probe · ${node.last}</p>` : ""}
-        ${node.hermes ? `<p class="detail">hermes · DETECTED — no remote agent status</p>` : ""}
+        ${node.role === "local" && node.hermes ? `<p class="detail">hermes · DETECTED — local home only, no remote agent status</p>` : ""}
+        ${node.role !== "local" ? `<p class="detail">hermes · not checked (local only)</p>` : ""}
         <p class="hint">${scene.hint}</p>
       `;
     }
@@ -286,8 +287,8 @@
       scene.nodes.forEach((n) => {
         if (n.role === "local") return;
         ctx.beginPath();
-        ctx.strokeStyle = colors[n.chip] + (n.chip === "LIVE" ? "d0" : "88");
-        ctx.lineWidth = n.chip === "LIVE" ? 2.8 : 1.7;
+        ctx.strokeStyle = colors[n.chip] + (n.chip === "LIVE" ? "d0" : (n.chip === "STALE" ? "55" : "88"));
+        ctx.lineWidth = n.chip === "LIVE" ? 2.8 : 1.3;
         ctx.setLineDash(n.chip === "LIVE" ? [] : [8, 10]);
         ctx.moveTo(local.x * w, local.y * h);
         ctx.lineTo(n.x * w, n.y * h);

@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "smf.fleet-lattice",
   "name": "Fleet Lattice",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "SMF Works",
   "license": "MIT",
-  "description": "Fullscreen sci-fi multi-machine node graph: local host plus peer Omarchy boxes. A fleet command hologram overlay.",
+  "description": "Fullscreen sci-fi multi-machine node graph. DEMO/UNKNOWN/ERR/STALE are labeled; do not read the hologram as fleet status.",
   "kinds": ["overlay", "bar-widget"],
   "keepLoaded": true,
   "entryPoints": {

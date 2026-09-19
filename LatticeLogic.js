@@ -7,9 +7,17 @@
 
 var STALE_MS = 5 * 60 * 1000
 var POLL_MS = 4000
+var PROBE_TIMEOUT_MS = 8000
 var MAX_PEERS = 18
 var CONFIG_REL = ".config/smf-fleet-lattice/fleet.json"
 var ENV_KEYS = ["SMF_FLEET_LATTICE", "SMF_FLEET"]
+var COLOR_LIVE = "#3DDC97"
+var COLOR_ERR = "#FF4D6D"
+var COLOR_STALE = "#F5A524"
+var COLOR_UNKNOWN = "#8B93A7"
+var COLOR_DEMO = "#7DD3FC"
+
+var sharedSnapshot = null
 
 function clamp(value, lo, hi) {
   return Math.max(lo, Math.min(hi, value))
@@ -50,8 +58,8 @@ function emptyFleet() {
   return {
     mode: "demo",
     chip: "DEMO",
-    honesty: "DEMO fleet · peers are samples, not online",
-    hint: "demo lattice · no fleet.json",
+    honesty: "NO CONFIG · DEMO samples, not your fleet · peers are samples, not online",
+    hint: "no fleet.json · demo samples",
     error: "",
     peerSource: "demo",
     probesEnabled: false,
@@ -60,11 +68,49 @@ function emptyFleet() {
     localLive: false,
     probeStale: false,
     anyReachable: false,
+    allConfiguredLive: false,
+    livePeerCount: 0,
+    unresolvedPeerCount: 0,
     nodes: [],
     edges: [],
     selectedId: "",
     forceDemo: false,
-    hermes: ""
+    missingConfig: true,
+    hermes: "",
+    hermesScope: "local-only"
+  }
+}
+
+function emptyShared() {
+  return {
+    chip: "DEMO",
+    mode: "demo",
+    count: 0,
+    honesty: "DEMO · overlay not mounted yet",
+    hint: "no fleet.json · demo samples"
+  }
+}
+
+function writeShared(fleet) {
+  fleet = fleet || emptyFleet()
+  sharedSnapshot = {
+    chip: String(fleet.chip || "DEMO"),
+    mode: String(fleet.mode || "demo"),
+    count: countNodes(fleet),
+    honesty: String(fleet.honesty || ""),
+    hint: String(fleet.hint || "")
+  }
+  return sharedSnapshot
+}
+
+function readShared() {
+  if (!sharedSnapshot) return emptyShared()
+  return {
+    chip: String(sharedSnapshot.chip || "DEMO"),
+    mode: String(sharedSnapshot.mode || "demo"),
+    count: number(sharedSnapshot.count),
+    honesty: String(sharedSnapshot.honesty || ""),
+    hint: String(sharedSnapshot.hint || "")
   }
 }
 
@@ -252,11 +298,17 @@ function hermesLabel(flags) {
   return ""
 }
 
+function remoteHermesNote() {
+  return "hermes · not checked (local only)"
+}
+
 function neverInventedRemoteHermes(node) {
   if (!node) return true
   if (node.role === "local") return true
   var mark = String(node.hermes || "")
-  return mark === ""
+  if (mark !== "") return false
+  var note = String(node.hermesNote || remoteHermesNote()).toLowerCase()
+  return note.indexOf("not checked") !== -1
 }
 
 function localNode(facts) {
@@ -288,7 +340,7 @@ function localNode(facts) {
     hermes: hermes,
     lastProbeAt: 0,
     lastProbeLabel: live ? "local read" : "",
-    reachable: live ? true : null,
+    reachable: null,
     configured: true,
     demo: false
   }
@@ -305,13 +357,14 @@ function peerNode(peer, opts) {
     source: demo ? "demo" : String((peer && peer.source) || "config"),
     presence: demo ? "demo" : "unknown",
     chip: demo ? "DEMO" : "UNKNOWN",
-    status: demo ? "DEMO sample · not online" : "CONFIGURED · UNKNOWN reachability",
+    status: demo ? "DEMO sample · not online" : "CONFIGURED · UNKNOWN — not offline",
     detail: demo
       ? "curated sample node — never treated as reachable"
-      : "listed in fleet config · probes off",
+      : "listed in fleet config · probes off · reachability not measured",
     load: { ok: false, one: 0, five: 0, fifteen: 0, raw: "", label: "" },
     uname: "",
     hermes: "",
+    hermesNote: remoteHermesNote(),
     lastProbeAt: 0,
     lastProbeLabel: "",
     reachable: null,
@@ -343,6 +396,7 @@ function cloneNode(node) {
     } : { ok: false, one: 0, five: 0, fifteen: 0, raw: "", label: "" },
     uname: String(node.uname || ""),
     hermes: String(node.hermes || ""),
+    hermesNote: String(node.hermesNote || ""),
     lastProbeAt: number(node.lastProbeAt),
     lastProbeLabel: String(node.lastProbeLabel || ""),
     reachable: node.reachable === true ? true : (node.reachable === false ? false : null),
@@ -370,11 +424,11 @@ function modeLabel(mode) {
 }
 
 function chipColor(chip) {
-  if (chip === "LIVE") return "#3DDC97"
-  if (chip === "ERR") return "#FF4D6D"
-  if (chip === "STALE") return "#F5A524"
-  if (chip === "UNKNOWN") return "#F5A524"
-  return "#7DD3FC"
+  if (chip === "LIVE") return COLOR_LIVE
+  if (chip === "ERR") return COLOR_ERR
+  if (chip === "STALE") return COLOR_STALE
+  if (chip === "UNKNOWN") return COLOR_UNKNOWN
+  return COLOR_DEMO
 }
 
 function relativeTime(epochMs, nowMs) {
@@ -392,7 +446,10 @@ function pretendsOnline(text) {
   var s = String(text || "").toLowerCase()
   if (s.indexOf("not online") !== -1 || s.indexOf("never treated as reachable") !== -1)
     return false
+  if (s.indexOf("not a green fleet") !== -1 || s.indexOf("not offline") !== -1)
+    return false
   return s.indexOf(" is online") !== -1 || s.indexOf("are online") !== -1
+    || s.indexOf("fleet is up") !== -1
 }
 
 function neverPretendOnline(node) {
@@ -424,6 +481,12 @@ function clampHonestNode(node) {
   var copy = cloneNode(node)
   if (!copy) return null
   copy.chip = honestChip(copy)
+  if (copy.role !== "local") {
+    copy.hermes = ""
+    copy.hermesNote = remoteHermesNote()
+  }
+  if (copy.role === "local")
+    copy.reachable = null
   if (copy.chip === "DEMO") {
     copy.presence = "demo"
     copy.reachable = null
@@ -435,6 +498,38 @@ function clampHonestNode(node) {
   return copy
 }
 
+function probeKey(id, host) {
+  return String(id || "") + "\0" + String(host || "")
+}
+
+function lookupProbe(probeMap, node) {
+  probeMap = probeMap || {}
+  if (!node) return null
+  var keyed = probeMap[probeKey(node.id, node.host)]
+  if (keyed) return keyed
+  var byId = probeMap[node.id]
+  if (byId && (!byId.host || String(byId.host) === String(node.host)))
+    return byId
+  return null
+}
+
+function classifyConfigLoadError(error) {
+  var raw = ""
+  if (error === undefined || error === null) raw = ""
+  else if (typeof error === "object")
+    raw = String(error.message || error.error || error.code || error)
+  else raw = String(error)
+  var s = raw.toLowerCase()
+  if (!s || /not found|enoent|no such file|does not exist|filenotfound|file_not_found|missing/.test(s))
+    return { missing: true, ok: true, error: "" }
+  return { missing: false, ok: false, error: raw || "fleet.json unreadable" }
+}
+
+function classifyProbeFailure(errorText) {
+  var raw = trim(errorText)
+  return raw || "opt-in probe failed"
+}
+
 function applyProbe(node, result, now, staleAfterMs) {
   var copy = cloneNode(node)
   if (!copy) return null
@@ -444,8 +539,35 @@ function applyProbe(node, result, now, staleAfterMs) {
   var at = number(result.at) || number(now) || Date.now()
   var age = Math.max(0, number(now || at) - at)
   var staleLimit = staleAfterMs > 0 ? staleAfterMs : STALE_MS
+  var timeoutMs = PROBE_TIMEOUT_MS
+  if (result.host && String(result.host) !== String(copy.host)) {
+    copy.presence = "unknown"
+    copy.chip = "UNKNOWN"
+    copy.status = "CONFIGURED · UNKNOWN — not offline"
+    copy.detail = "listed in fleet config · leftover probe was for a different host"
+    copy.reachable = null
+    copy.lastProbeAt = 0
+    copy.lastProbeLabel = ""
+    return copy
+  }
   copy.lastProbeAt = at
   copy.lastProbeLabel = relativeTime(at, now || at)
+  if (result.pending === true && result.ok !== true && result.ok !== false) {
+    if (age > timeoutMs) {
+      copy.presence = "err"
+      copy.chip = "ERR"
+      copy.status = "ERR · probe timed out"
+      copy.detail = "opt-in probe launched · no result · treated as failure"
+      copy.reachable = false
+      return copy
+    }
+    copy.presence = "unknown"
+    copy.chip = "UNKNOWN"
+    copy.status = "CONFIGURED · UNKNOWN — probe in flight"
+    copy.detail = "opt-in " + String(result.method || "ping") + " launched · not offline yet"
+    copy.reachable = null
+    return copy
+  }
   if (result.ok === true) {
     if (age > staleLimit) {
       copy.presence = "stale"
@@ -501,6 +623,20 @@ function shouldProbe(node, probesEnabled) {
   return !!trim(node.host)
 }
 
+function probeDue(node, hit, now, staleAfterMs) {
+  if (!shouldProbe(node, true)) return false
+  if (!hit) return true
+  if (hit.host && node && String(hit.host) !== String(node.host)) return true
+  var at = number(hit.at)
+  var age = Math.max(0, number(now) - at)
+  var staleLimit = staleAfterMs > 0 ? staleAfterMs : STALE_MS
+  if (hit.pending === true && hit.ok !== true && hit.ok !== false)
+    return age > PROBE_TIMEOUT_MS
+  if (hit.ok === true) return age > Math.max(Math.floor(staleLimit / 2), 15000)
+  if (hit.ok === false) return age > Math.max(POLL_MS * 2, 8000)
+  return true
+}
+
 function probeQueue(nodes, probesEnabled, method) {
   var out = []
   var list = nodes || []
@@ -518,7 +654,7 @@ function probeQueue(nodes, probesEnabled, method) {
 function resolvePeerSource(opts) {
   opts = opts || {}
   if (opts.forceDemo === true)
-    return { source: "demo", nodes: demoPeers().map(function(p) { return normalizePeer(p, "demo") }), error: "", probe: false, probeMethod: "ping", staleAfterMs: STALE_MS }
+    return { source: "demo", nodes: demoPeers().map(function(p) { return normalizePeer(p, "demo") }), error: "", probe: false, probeMethod: "ping", staleAfterMs: STALE_MS, missing: false, forced: true }
   var cfg = opts.config && opts.config.ok !== false && (opts.config.nodes || []).length
     ? opts.config
     : null
@@ -527,16 +663,18 @@ function resolvePeerSource(opts) {
     : null
   var chosen = cfg || env
   if (opts.config && opts.config.ok === false && !env)
-    return { source: "err", nodes: demoPeers().map(function(p) { return normalizePeer(p, "demo") }), error: opts.config.error || "fleet.json unreadable", probe: false, probeMethod: "ping", staleAfterMs: STALE_MS }
+    return { source: "err", nodes: demoPeers().map(function(p) { return normalizePeer(p, "demo") }), error: opts.config.error || "fleet.json unreadable", probe: false, probeMethod: "ping", staleAfterMs: STALE_MS, missing: false, forced: false }
   if (!chosen)
-    return { source: "demo", nodes: demoPeers().map(function(p) { return normalizePeer(p, "demo") }), error: "", probe: false, probeMethod: "ping", staleAfterMs: STALE_MS }
+    return { source: "demo", nodes: demoPeers().map(function(p) { return normalizePeer(p, "demo") }), error: "", probe: false, probeMethod: "ping", staleAfterMs: STALE_MS, missing: true, forced: false }
   return {
     source: chosen.source || "config",
     nodes: (chosen.nodes || []).slice(),
     error: "",
     probe: chosen.probe === true,
     probeMethod: parseProbeMethod(chosen.probeMethod),
-    staleAfterMs: chosen.staleAfterMs || STALE_MS
+    staleAfterMs: chosen.staleAfterMs || STALE_MS,
+    missing: false,
+    forced: false
   }
 }
 
@@ -552,12 +690,7 @@ function edgesFor(nodes) {
   for (i = 0; i < list.length; i++) {
     var peer = list[i]
     if (peer.role === "local") continue
-    var kind = "unknown"
-    if (peer.demo || peer.source === "demo") kind = "demo"
-    else if (peer.reachable === true && peer.chip === "LIVE") kind = "live"
-    else if (peer.chip === "ERR") kind = "err"
-    else if (peer.chip === "STALE") kind = "stale"
-    else if (peer.configured) kind = "configured"
+    var kind = edgeKind(peer)
     edges.push({
       from: local.id,
       to: peer.id,
@@ -566,6 +699,24 @@ function edgesFor(nodes) {
     })
   }
   return edges
+}
+
+function edgeKind(peer) {
+  if (!peer) return "unknown"
+  if (peer.demo || peer.source === "demo" || peer.chip === "DEMO") return "demo"
+  if (peer.reachable === true && peer.chip === "LIVE" && peer.presence === "live") return "live"
+  if (peer.chip === "ERR" || peer.presence === "err") return "err"
+  if (peer.chip === "STALE" || peer.presence === "stale") return "stale"
+  if (peer.configured) return "configured"
+  return "unknown"
+}
+
+function edgeStroke(kind) {
+  if (kind === "live") return { dash: false, alpha: 0.72, width: 2.4 }
+  if (kind === "stale") return { dash: true, alpha: 0.22, width: 1.2 }
+  if (kind === "err") return { dash: true, alpha: 0.28, width: 1.3 }
+  if (kind === "demo") return { dash: true, alpha: 0.22, width: 1.1 }
+  return { dash: true, alpha: 0.2, width: 1.2 }
 }
 
 function hexPoints(cx, cy, radius, rotation) {
@@ -630,7 +781,8 @@ function fleetMode(fleet) {
   if (fleet.peerSource === "demo") return "demo"
   if (fleet.probesEnabled && fleet.probeStale) return "stale"
   if (fleet.probesEnabled && fleet.error && !fleet.anyReachable) return "err"
-  if (fleet.probesEnabled && fleet.anyReachable) return "live"
+  if (fleet.probesEnabled && fleet.anyReachable && fleet.allConfiguredLive)
+    return "live"
   if (fleet.peerSource === "config" || fleet.peerSource === "env")
     return "unknown"
   return "demo"
@@ -647,17 +799,23 @@ function honestyLine(fleet) {
   }
   if (mode === "err")
     return "ERR · " + (fleet.error || "fleet.json unreadable") + " · DEMO peers, not online"
-  if (mode === "demo")
-    return "DEMO fleet · local " + (fleet.localLive ? "LIVE" : "UNKNOWN") + " · peers are samples, not online"
+  if (mode === "demo") {
+    if (fleet.forceDemo === true)
+      return "DEMO forced · local " + (fleet.localLive ? "LIVE" : "UNKNOWN") + " · peers are samples, not online"
+    return "NO CONFIG · DEMO samples, not your fleet · local " + (fleet.localLive ? "LIVE" : "UNKNOWN") + " · peers are samples, not online"
+  }
   if (mode === "stale")
-    return "STALE · last opt-in probe aged out · not a current online map"
-  if (mode === "unknown")
+    return "STALE · last opt-in probe aged out · last-seen only, not a current link"
+  if (mode === "unknown") {
+    if (fleet.probesEnabled && fleet.anyReachable)
+      return (fleet.livePeerCount || 0) + " LIVE probe · " + (fleet.unresolvedPeerCount || 0) + " still UNKNOWN/ERR — not a green fleet · local " + (fleet.localLive ? "LIVE" : "UNKNOWN")
     return fleet.probesEnabled
-      ? "UNKNOWN reachability · " + peers + " CONFIGURED · waiting on opt-in probes · local " + (fleet.localLive ? "LIVE" : "UNKNOWN")
-      : "UNKNOWN reachability · " + peers + " CONFIGURED · probes off · local " + (fleet.localLive ? "LIVE" : "UNKNOWN")
-  if (fleet.probesEnabled)
-    return "LIVE local" + (fleet.anyReachable ? " · probe hits" : " · probes on") + " · " + peers + " configured"
-  return "LIVE local · " + peers + " CONFIGURED"
+      ? "UNKNOWN — not offline · " + peers + " CONFIGURED · waiting on opt-in probes · local " + (fleet.localLive ? "LIVE" : "UNKNOWN")
+      : "UNKNOWN — not offline · " + peers + " CONFIGURED · probes off · local " + (fleet.localLive ? "LIVE" : "UNKNOWN")
+  }
+  if (fleet.probesEnabled && fleet.allConfiguredLive)
+    return "LIVE probes · " + peers + " configured current · local " + (fleet.localLive ? "LIVE" : "UNKNOWN")
+  return "UNKNOWN — not a green fleet · " + peers + " CONFIGURED"
 }
 
 function fleetHonest(fleet) {
@@ -666,17 +824,40 @@ function fleetHonest(fleet) {
   var nodes = fleet.nodes || []
   var edges = fleet.edges || []
   var i
+  if (chipColor("UNKNOWN") === chipColor("STALE")) return false
+  if (chipColor("UNKNOWN") === chipColor("LIVE")) return false
+  if (chipColor("DEMO") === chipColor("LIVE")) return false
+  if (mode === "live" && fleet.allConfiguredLive !== true) return false
+  if (mode === "live" && !fleet.probesEnabled) return false
+  if (fleet.localLive === true && mode === "demo" && fleet.chip === "LIVE") return false
+  if (fleet.localLive === true && mode === "unknown" && fleet.chip === "LIVE") return false
+  if (pretendsOnline(fleet.honesty)) return false
   for (i = 0; i < nodes.length; i++) {
     var node = nodes[i]
-    if (node.role === "local") continue
+    if (node.role === "local") {
+      if (node.reachable === true) return false
+      continue
+    }
     if (!neverPretendOnline(node)) return false
+    if (!neverInventedRemoteHermes(node)) return false
     if (honestChip(node) !== node.chip) return false
-    if ((mode === "demo" || mode === "unknown") && node.chip === "LIVE") return false
-    if ((mode === "demo" || mode === "unknown") && node.reachable === true) return false
+    if (mode === "demo" && node.chip === "LIVE") return false
+    if (mode === "demo" && node.reachable === true) return false
+    if (mode === "unknown" && node.reachable === true && node.chip === "LIVE") {
+      /* mixed probes stay on UNKNOWN fleet chip; a single live peer is ok */
+    } else if (mode === "unknown" && node.chip === "LIVE" && fleet.allConfiguredLive === true) {
+      return false
+    }
+    if (mode === "unknown" && node.reachable === true && fleet.chip === "LIVE") return false
     if (mode === "demo" && node.chip !== "DEMO") return false
   }
   for (i = 0; i < edges.length; i++) {
-    if ((mode === "demo" || mode === "unknown") && edges[i].kind === "live") return false
+    if ((mode === "demo") && edges[i].kind === "live") return false
+    if (mode !== "live" && edges[i].kind === "live" && fleet.allConfiguredLive === true)
+      return false
+    if (edges[i].kind === "stale" && edges[i].kind === "live") return false
+    if (String(edges[i].chip) === "STALE" && edges[i].kind !== "stale") return false
+    if (String(edges[i].chip) === "DEMO" && edges[i].kind === "live") return false
   }
   if (mode === "demo" && fleet.chip !== "DEMO") return false
   if (mode === "unknown" && fleet.chip !== "UNKNOWN") return false
@@ -686,11 +867,20 @@ function fleetHonest(fleet) {
 function catalogHint(fleet) {
   fleet = fleet || emptyFleet()
   var mode = fleetMode(fleet)
-  if (mode === "demo") return "demo lattice · no fleet.json"
+  if (mode === "demo") {
+    if (fleet.forceDemo === true) return "demo forced · samples only"
+    return "no fleet.json · demo samples"
+  }
   if (mode === "err") return "config error · demo lattice"
-  if (mode === "stale") return "stale probes · last-seen only"
-  if (mode === "unknown") return "configured lattice · probes off"
-  return fleet.probesEnabled ? "opt-in probes" : "configured lattice"
+  if (mode === "stale") return "stale probes · last-seen only · not a current link"
+  if (mode === "unknown") {
+    if (fleet.probesEnabled && fleet.anyReachable)
+      return "mixed probes · not a green fleet"
+    return fleet.probesEnabled
+      ? "configured lattice · waiting on probes"
+      : "configured lattice · probes off · not offline"
+  }
+  return fleet.probesEnabled ? "opt-in probes current" : "configured lattice"
 }
 
 function countNodes(fleet) {
@@ -745,11 +935,11 @@ function buildFleet(opts) {
     var node = peerNode(raw, { demo: demo })
     if (!demo && resolved.probe === true) {
       var probeMap = opts.probes || {}
-      var hit = probeMap[node.id] || probeMap[node.host]
+      var hit = lookupProbe(probeMap, node)
       if (hit) node = applyProbe(node, hit, now, resolved.staleAfterMs)
       else {
-        node.status = "CONFIGURED · UNKNOWN reachability"
-        node.detail = "opt-in probes enabled · no result yet"
+        node.status = "CONFIGURED · UNKNOWN — not offline"
+        node.detail = "opt-in probes enabled · no result yet · not a down claim"
       }
     }
     peers.push(clampHonestNode(node))
@@ -758,16 +948,26 @@ function buildFleet(opts) {
   var anyReachable = false
   var probeStale = false
   var probeSeen = false
+  var livePeerCount = 0
+  var unresolvedPeerCount = 0
+  var configuredPeers = 0
   for (i = 0; i < nodes.length; i++) {
-    if (nodes[i].role !== "local" && nodes[i].reachable === true && nodes[i].chip === "LIVE")
+    if (nodes[i].role === "local") continue
+    configuredPeers++
+    if (nodes[i].reachable === true && nodes[i].chip === "LIVE") {
       anyReachable = true
-    if (nodes[i].role !== "local" && nodes[i].chip === "STALE")
+      livePeerCount++
+    } else {
+      unresolvedPeerCount++
+    }
+    if (nodes[i].chip === "STALE")
       probeStale = true
-    if (nodes[i].role !== "local" && nodes[i].lastProbeAt > 0)
+    if (nodes[i].lastProbeAt > 0)
       probeSeen = true
   }
   var fleet = emptyFleet()
   fleet.forceDemo = opts.forceDemo === true
+  fleet.missingConfig = resolved.missing === true && opts.forceDemo !== true
   fleet.peerSource = resolved.source
   fleet.error = resolved.error || ""
   fleet.probesEnabled = resolved.probe === true && resolved.source !== "demo" && resolved.source !== "err"
@@ -775,10 +975,14 @@ function buildFleet(opts) {
   fleet.staleAfterMs = resolved.staleAfterMs
   fleet.localLive = local.chip === "LIVE"
   fleet.anyReachable = anyReachable
+  fleet.livePeerCount = livePeerCount
+  fleet.unresolvedPeerCount = unresolvedPeerCount
+  fleet.allConfiguredLive = fleet.probesEnabled && configuredPeers > 0 && unresolvedPeerCount === 0 && livePeerCount === configuredPeers
   fleet.probeStale = probeStale && !anyReachable
   fleet.nodes = nodes
   fleet.edges = edgesFor(nodes)
   fleet.hermes = local.hermes
+  fleet.hermesScope = "local-only"
   fleet.selectedId = opts.selectedId || "local"
   if (!findNode(nodes, fleet.selectedId)) fleet.selectedId = "local"
   fleet.mode = fleetMode(fleet)
@@ -787,5 +991,6 @@ function buildFleet(opts) {
   fleet.hint = catalogHint(fleet)
   if (probeSeen && fleet.probesEnabled && !anyReachable && !probeStale && fleet.mode === "unknown")
     fleet.hint = "configured lattice · waiting on probes"
+  writeShared(fleet)
   return fleet
 }

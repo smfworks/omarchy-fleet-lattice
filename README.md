@@ -9,7 +9,11 @@ Plugin id: `smf.fleet-lattice`. Overlay plus a tiny bar-widget summoner /
 fleet-count chip. From [SMF Works](https://github.com/smfworks); destined for
 mikesai6 Omarchy installs, and useful on any Omarchy host.
 
-There is **no magic fleet API**. The HUD is honest about what it actually read.
+There is **no magic fleet API**. The HUD is honest about what it actually
+read. **Do not trust the node graph as fleet status yet** — see
+[docs/OPPOSITION.md](docs/OPPOSITION.md). Local LIVE is local facts. DEMO
+peers are samples. UNKNOWN is not offline. A green center is not a green
+fleet.
 
 Sibling plugins from the main shortlist:
 [Orbit Dock](https://github.com/smfworks/omarchy-orbit-dock),
@@ -86,33 +90,48 @@ list). Config file wins over env when it lists nodes.
 **Probes are opt-in.** Default `probe: false` does **not** ping or SSH anyone.
 When you set `"probe": true`, Fleet Lattice may run `ping -c1 -W1` or
 `ssh -oBatchMode=yes -oConnectTimeout=1` against configured hosts only.
-DEMO sample nodes are never probed.
+DEMO sample nodes are never probed. A launched probe that fails, times out,
+or never returns chips **ERR** (then **STALE** if that result ages). The HUD
+does not keep a miss as silent UNKNOWN. Hits bind **id + host** so a rewritten
+host does not inherit a leftover ping.
 
 ## DEMO vs LIVE
 
-The honesty chip is labeled so a screenshot is self-describing:
+The honesty chip is labeled so a screenshot is self-describing. Paint is
+distinct: DEMO cyan, LIVE green, UNKNOWN slate, STALE amber, ERR red.
 
-- **DEMO** — no `fleet.json` / env peers (or `{"demo":true}`). A curated sample
-  lattice still fills the HUD (`mikesai1` / `mikesai6` / `lab-edge` / …).
-  DEMO peers are **never** treated as online
-- **LIVE** — a node-level LIVE is local facts we actually read, or a fresh
-  opt-in probe hit. The fleet chip stays **UNKNOWN** until a probe succeeds;
-  LIVE on the local node does **not** make DEMO or unprobed peers green
-- **UNKNOWN** — peers from config/env with probes off. Status is
-  **CONFIGURED / UNKNOWN**, not online
-- **ERR** — `fleet.json` is unreadable, or an opt-in probe failed. The HUD
-  still paints a lattice (DEMO peers if the file is broken)
-- **STALE** — last opt-in probe aged out; last-seen only, not a current map
+- **DEMO** — no `fleet.json` / env peers (**NO CONFIG**), or `{"demo":true}`
+  (**DEMO forced**). A curated sample lattice still fills the HUD
+  (`mikesai1` / `mikesai6` / `lab-edge` / …). DEMO peers are **never**
+  treated as online. Missing file ≠ unreadable file (unreadable is **ERR**)
+- **LIVE** — a **node** is LIVE for local facts we actually read, or a
+  fresh opt-in probe hit on that peer. The **fleet** chip is LIVE only when
+  every configured peer has a current probe hit. Local LIVE does **not**
+  greenwash DEMO, UNKNOWN, ERR, or STALE peers. One probe hit among
+  UNKNOWN/ERR peers is **not** a green fleet
+- **UNKNOWN** — configured / waiting on probes / mixed results. **Not
+  offline.** Slate, not amber. Reachability was not measured (or not for
+  every peer)
+- **ERR** — `fleet.json` is unreadable, or an opt-in probe failed / timed
+  out / never came back. Failures are visible; they do not stay pretty
+  UNKNOWN
+- **STALE** — last opt-in probe aged out; last-seen only, **not a current
+  link**. Amber, dashed edges — never a solid live stroke
 
 The local node is always built from cheap local facts (`hostname`, `uname -sr`,
 `/proc/loadavg` or `uptime`). That node is **LIVE** only for facts we actually
-read. The HUD never fails as a silent empty graph.
+read. Local `reachable` is not a ping. The HUD never fails as a silent empty
+graph.
+
+Adversarial review of remaining trust holes (and what this release closed):
+[docs/OPPOSITION.md](docs/OPPOSITION.md).
 
 ## Agents
 
 Local Hermes is marked **DETECTED** only when `~/.hermes` exists (same honesty
-as Ghost Trace: `state.db` or the directory). Fleet Lattice does **not** invent
-Hermes/agent status on remote nodes.
+as Ghost Trace: `state.db` or the directory). Remote nodes always say
+**hermes · not checked (local only)**. Fleet Lattice does **not** invent
+Hermes/agent status on remotes, and a blank row is not a “no agent” finding.
 
 ## Usage
 
@@ -121,6 +140,8 @@ Hermes/agent status on remote nodes.
 - Click a node (or `←` `→`) for the side panel: label, host, status, last probe
 - `Escape` closes
 - Theme colors come from Omarchy `Style` / `Color` vars
+- Bar chip names the same DEMO / UNKNOWN / ERR / STALE / LIVE the overlay
+  would; it is not a mute “fleet is up” sticker
 
 ## Contract
 
