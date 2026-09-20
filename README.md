@@ -23,6 +23,12 @@ Sibling plugins from the main shortlist:
 [Cron Constellation](https://github.com/smfworks/omarchy-cron-constellation)).
 Fleet Lattice is a runner-up after that shortlist.
 
+## Demo
+
+Fleet Lattice on Omarchy (mikesai6) — multi-machine node graph (DEMO lattice + live local facts; not fleet status).
+
+https://github.com/smfworks/omarchy-fleet-lattice/releases/download/demo/demo.mp4
+
 ## Install
 
 ```sh
